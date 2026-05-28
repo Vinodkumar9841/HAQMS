@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import Navbar from '@/components/common/Navbar';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
   Users, CalendarDays, Activity, Search, Sparkles, UserPlus, 
@@ -14,7 +15,6 @@ export default function Dashboard() {
   const { user, token, API_BASE_URL, logout } = useAuth();
   const router = useRouter();
 
-  // Navigation Guard
   useEffect(() => {
     if (!user) {
       router.push('/login');
@@ -23,19 +23,14 @@ export default function Dashboard() {
 
   if (!user) return null;
 
-  // Global State
   const [activeTab, setActiveTab] = useState(user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
 
-  // ==========================================
-  // STATE FOR RECEPTIONIST WORKFLOWS
-  // ==========================================
   const [patients, setPatients] = useState([]);
   const [patientsLoading, setPatientsLoading] = useState(false);
   const [patientSearch, setPatientSearch] = useState('');
   const [patientGender, setPatientGender] = useState('All');
   const [patientsPagination, setPatientsPagination] = useState({ page: 1, totalPages: 1 });
-  
-  // Registration Form
+
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPhone, setRegPhone] = useState('');
@@ -44,7 +39,6 @@ export default function Dashboard() {
   const [regHistory, setRegHistory] = useState('');
   const [regMessage, setRegMessage] = useState('');
 
-  // Queue and Appointment Booking
   const [doctorsList, setDoctorsList] = useState([]);
   const [bookingPatientId, setBookingPatientId] = useState('');
   const [bookingDoctorId, setBookingDoctorId] = useState('');
@@ -53,29 +47,17 @@ export default function Dashboard() {
   const [bookingMessage, setBookingMessage] = useState('');
   const [checkinMessage, setCheckinMessage] = useState('');
 
-  // ==========================================
-  // STATE FOR DOCTOR WORKFLOWS
-  // ==========================================
   const [doctorAppointments, setDoctorAppointments] = useState([]);
   const [doctorQueue, setDoctorQueue] = useState([]);
   const [selectedPatientHistory, setSelectedPatientHistory] = useState(null);
 
-  // ==========================================
-  // STATE FOR ADMIN WORKFLOWS
-  // ==========================================
   const [adminReportData, setAdminReportData] = useState(null);
   const [adminReportLoading, setAdminReportLoading] = useState(false);
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
 
-  // ==========================================
-  // RECEPTIONIST FUNCTIONS
-  // ==========================================
-  
-  // Fetch Patients List
   const fetchPatients = async (page = 1) => {
     setPatientsLoading(true);
     try {
-      // Inefficient memory pagination called from client
       const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${patientSearch}&gender=${patientGender}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -95,14 +77,18 @@ export default function Dashboard() {
     }
   };
 
-  // Trigger Patient List Fetch (Every keystroke trigger re-renders parent! - Performance bug)
+  // FIX: Debounced search - only fires API call 400ms after user stops typing
+  const debounceTimer = useRef(null);
   useEffect(() => {
     if (user.role === 'RECEPTIONIST' || user.role === 'ADMIN') {
-      fetchPatients(1);
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => {
+        fetchPatients(1);
+      }, 400);
     }
+    return () => clearTimeout(debounceTimer.current);
   }, [patientSearch, patientGender]);
 
-  // Fetch Doctors for booking drop-down
   const fetchDoctorsDropdown = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/doctors`, {
@@ -119,13 +105,10 @@ export default function Dashboard() {
     fetchDoctorsDropdown();
   }, []);
 
-  // Handle Patient Registration
   const handleRegisterPatient = async (e) => {
     e.preventDefault();
     setRegMessage('');
 
-    // INCONSISTENT VALIDATION: Receptionist form doesn't validate telephone structure on client, 
-    // leading to database pollution (e.g. text telephone values)
     if (!regName || !regPhone || !regAge) {
       setRegMessage('Error: Name, Age and Phone number are required.');
       return;
@@ -151,13 +134,11 @@ export default function Dashboard() {
       const data = await res.json();
       if (res.ok) {
         setRegMessage('Success: Patient registered successfully!');
-        // Clear fields
         setRegName('');
         setRegEmail('');
         setRegPhone('');
         setRegAge('');
         setRegHistory('');
-        // Refresh directory
         fetchPatients(1);
       } else {
         setRegMessage(`Error: ${data.error || 'Failed to register'}`);
@@ -167,7 +148,6 @@ export default function Dashboard() {
     }
   };
 
-  // Handle Appointment Booking
   const handleBookAppointment = async (e) => {
     e.preventDefault();
     setBookingMessage('');
@@ -205,7 +185,6 @@ export default function Dashboard() {
     }
   };
 
-  // Delete Patient (Bypassed authorization admin check!)
   const handleDeletePatient = async (id) => {
     if (!confirm('Are you sure you want to delete this patient record?')) return;
     try {
@@ -225,7 +204,6 @@ export default function Dashboard() {
     }
   };
 
-  // Queue Token Checkin (Race condition API!)
   const handleQueueCheckin = async (patientId, doctorId, appointmentId = null) => {
     setCheckinMessage('');
     try {
@@ -249,17 +227,12 @@ export default function Dashboard() {
     }
   };
 
-  // ==========================================
-  // DOCTOR WORKFLOW FUNCTIONS
-  // ==========================================
   const fetchDoctorWorklist = async () => {
     if (user.role !== 'DOCTOR') return;
     try {
-      // Find matching doctor from doctors dropdown using user ID link
       const matchedDoc = doctorsList.find(d => d.userId === user.id);
       if (!matchedDoc) return;
 
-      // 1. Fetch appointments for this doctor (N+1 database queries triggers inside server)
       const appRes = await fetch(`${API_BASE_URL}/appointments?doctorId=${matchedDoc.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -268,7 +241,6 @@ export default function Dashboard() {
         setDoctorAppointments(appData.appointments);
       }
 
-      // 2. Fetch queue list for this doctor today
       const queueRes = await fetch(`${API_BASE_URL}/queue?doctorId=${matchedDoc.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -286,7 +258,6 @@ export default function Dashboard() {
     }
   }, [doctorsList]);
 
-  // Update token status (WAITING -> CALLING -> COMPLETED / SKIPPED)
   const handleUpdateQueueStatus = async (tokenId, newStatus) => {
     try {
       const res = await fetch(`${API_BASE_URL}/queue/${tokenId}`, {
@@ -305,7 +276,6 @@ export default function Dashboard() {
     }
   };
 
-  // Complete consultation of an appointment
   const handleCompleteAppointment = async (appId) => {
     try {
       const res = await fetch(`${API_BASE_URL}/appointments/${appId}`, {
@@ -324,15 +294,9 @@ export default function Dashboard() {
     }
   };
 
-  // ==========================================
-  // ADMIN SYSTEM WORKFLOWS
-  // ==========================================
-  
-  // Slow report generator fetch
   const generateSystemReport = async () => {
     setAdminReportLoading(true);
     try {
-      // Calls slow nested aggregation endpoint
       const res = await fetch(`${API_BASE_URL}/reports/doctor-stats`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -347,7 +311,6 @@ export default function Dashboard() {
     }
   };
 
-  // Search Doctors (SQL Injection vulnerable API!)
   const searchPhysiciansAdmin = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/doctors?search=${adminSearchQuery}`, {
@@ -370,7 +333,6 @@ export default function Dashboard() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 sm:p-8">
         
-        {/* Navigation Tabs based on Role */}
         <div className="flex border-b border-slate-200 dark:border-slate-800 mb-8 overflow-x-auto gap-4">
           {user.role === 'ADMIN' && (
             <>
@@ -424,7 +386,6 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Global Notifications Panel */}
         {checkinMessage && (
           <div className="p-4 mb-6 rounded-xl bg-teal-500/10 border border-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-between text-sm">
             <span>{checkinMessage}</span>
@@ -432,13 +393,9 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ==============================================================
-            TAB: PATIENT REGISTRY (RECEPTIONIST & ADMIN)
-            ============================================================== */}
         {activeTab === 'patients' && (
           <div className="space-y-8">
             <div className="grid gap-8 lg:grid-cols-3">
-              {/* Directory Section */}
               <div className="lg:col-span-2 space-y-6">
                 <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800">
                   <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
@@ -446,7 +403,6 @@ export default function Dashboard() {
                     Patient Lookup Directory
                   </h3>
 
-                  {/* Filters (Causes slow re-renders on keystroke) */}
                   <div className="flex gap-4 mb-6">
                     <div className="relative flex-1 rounded-lg shadow-sm">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -454,8 +410,11 @@ export default function Dashboard() {
                       </div>
                       <input
                         type="text"
-                        value={patientSearch}
-                        onChange={(e) => setPatientSearch(e.target.value)}
+                        defaultValue={patientSearch}
+                        onChange={(e) => {
+                          clearTimeout(debounceTimer.current);
+                          debounceTimer.current = setTimeout(() => setPatientSearch(e.target.value), 400);
+                        }}
                         placeholder="Search by name, phone or email..."
                         className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                       />
@@ -473,7 +432,6 @@ export default function Dashboard() {
                     </select>
                   </div>
 
-                  {/* Table listing */}
                   {patientsLoading ? (
                     <p className="text-center py-6 text-slate-400 animate-pulse text-sm">Synchronizing table data...</p>
                   ) : patients.length === 0 ? (
@@ -507,8 +465,6 @@ export default function Dashboard() {
                                 >
                                   Check In
                                 </button>
-                                
-                                {/* Security flaw testing: Receptionist or doctor can delete since check is bypassed */}
                                 <button
                                   onClick={() => handleDeletePatient(p.id)}
                                   className="text-xxs p-1 rounded bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors"
@@ -524,7 +480,6 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* Pagination control */}
                   <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
                     <span className="text-xs text-slate-400 font-medium">
                       Page {patientsPagination.page} of {patientsPagination.totalPages}
@@ -549,7 +504,6 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Registration Form */}
               <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800 h-fit">
                 <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
                   <UserPlus className="h-5 w-5 text-teal-600" />
@@ -608,7 +562,7 @@ export default function Dashboard() {
                       required
                       value={regPhone}
                       onChange={(e) => setRegPhone(e.target.value)}
-                      placeholder="555-0199 (Unchecked format)"
+                      placeholder="9876543210"
                       className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                     />
                   </div>
@@ -625,7 +579,7 @@ export default function Dashboard() {
                   </div>
 
                   <div>
-                    <label className="block mb-1">Medical Anamnesis / History (Can be left blank)</label>
+                    <label className="block mb-1">Medical History (Optional)</label>
                     <textarea
                       value={regHistory}
                       onChange={(e) => setRegHistory(e.target.value)}
@@ -647,12 +601,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ==============================================================
-            TAB: SCHEDULING / BOOKING & CHECKIN (RECEPTIONIST & ADMIN)
-            ============================================================== */}
         {activeTab === 'book' && (
           <div className="grid gap-8 lg:grid-cols-2">
-            {/* Book Appointment Card */}
             <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800">
               <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
                 <CalendarDays className="h-5 w-5 text-teal-600" />
@@ -679,7 +629,6 @@ export default function Dashboard() {
                       <option key={p.id} value={p.id}>{p.name} ({p.phoneNumber})</option>
                     ))}
                   </select>
-                  <span className="text-xxs text-slate-400 block mt-1">If client is missing, register them in the Directory tab first.</span>
                 </div>
 
                 <div>
@@ -709,12 +658,12 @@ export default function Dashboard() {
                 </div>
 
                 <div>
-                  <label className="block mb-1">Consultation Objective / Reason</label>
+                  <label className="block mb-1">Consultation Reason</label>
                   <input
                     type="text"
                     value={bookingReason}
                     onChange={(e) => setBookingReason(e.target.value)}
-                    placeholder="Regular diagnostic review, suture removal..."
+                    placeholder="Regular diagnostic review..."
                     className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                   />
                 </div>
@@ -728,72 +677,58 @@ export default function Dashboard() {
               </form>
             </div>
 
-            {/* Quick Walkin Checkin Token Board */}
             <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800">
               <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
                 <Activity className="h-5 w-5 text-teal-600" />
                 Active Direct Queue Check-In
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-semibold">
-                Generate an immediate waiting token for a direct walk-in patient. Allocates active positions under selected practitioners.
+                Generate an immediate waiting token for a direct walk-in patient.
               </p>
 
-              <div className="space-y-6">
-                <div className="p-4 rounded-xl border border-teal-500/25 bg-teal-500/10 text-slate-700 dark:text-slate-300 text-xs leading-5">
-                  <strong>Token Generation Engine Note:</strong> Direct arrivals bypass appointments. The token engine automatically fetches the current days maximum token size and increments. 
-                  <span className="block mt-1 font-bold text-rose-500 uppercase tracking-wide">Warning: Vulnerable to check-in race conditions!</span>
-                </div>
-
-                <div className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  <div>
-                    <label className="block mb-1">Select Walk-in Patient*</label>
-                    <select
-                      id="walkin-patient"
-                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
-                    >
-                      <option value="">-- Choose Patient --</option>
-                      {patients.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block mb-1">Assign Physician*</label>
-                    <select
-                      id="walkin-doctor"
-                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
-                    >
-                      <option value="">-- Choose Physician --</option>
-                      {doctorsList.map(d => (
-                        <option key={d.id} value={d.id}>{d.name} ({d.specialization})</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      const pId = document.getElementById('walkin-patient').value;
-                      const dId = document.getElementById('walkin-doctor').value;
-                      if (!pId || !dId) {
-                        alert('Select patient and doctor first');
-                        return;
-                      }
-                      handleQueueCheckin(pId, dId);
-                    }}
-                    className="glow-btn w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-500 dark:text-slate-950 dark:hover:bg-teal-400 font-extrabold text-sm rounded-lg shadow-md transition-colors duration-300 mt-2"
+              <div className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <div>
+                  <label className="block mb-1">Select Walk-in Patient*</label>
+                  <select
+                    id="walkin-patient"
+                    className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                   >
-                    Generate Live Token
-                  </button>
+                    <option value="">-- Choose Patient --</option>
+                    {patients.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
                 </div>
+
+                <div>
+                  <label className="block mb-1">Assign Physician*</label>
+                  <select
+                    id="walkin-doctor"
+                    className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                  >
+                    <option value="">-- Choose Physician --</option>
+                    {doctorsList.map(d => (
+                      <option key={d.id} value={d.id}>{d.name} ({d.specialization})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  onClick={() => {
+                    const pId = document.getElementById('walkin-patient').value;
+                    const dId = document.getElementById('walkin-doctor').value;
+                    if (!pId || !dId) { alert('Select patient and doctor first'); return; }
+                    handleQueueCheckin(pId, dId);
+                  }}
+                  className="glow-btn w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-500 dark:text-slate-950 dark:hover:bg-teal-400 font-extrabold text-sm rounded-lg shadow-md transition-colors duration-300 mt-2"
+                >
+                  Generate Live Token
+                </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* ==============================================================
-            TAB: DOCTOR WORKLIST - APPOINTMENTS (DOCTOR ROLE)
-            ============================================================== */}
         {activeTab === 'appointments' && (
           <div className="space-y-6">
             <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md">
@@ -811,7 +746,7 @@ export default function Dashboard() {
                       <tr className="text-slate-400 uppercase tracking-widest text-xxs font-bold border-b border-slate-200 dark:border-slate-800">
                         <th className="pb-3">Time</th>
                         <th className="pb-3">Patient</th>
-                        <th className="pb-3">Consultation Reason</th>
+                        <th className="pb-3">Reason</th>
                         <th className="pb-3">Status</th>
                         <th className="pb-3 text-right">Actions</th>
                       </tr>
@@ -866,7 +801,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Patient Clinical History Modal Display */}
             {selectedPatientHistory && (
               <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md space-y-4">
                 <div className="flex justify-between items-start">
@@ -878,7 +812,7 @@ export default function Dashboard() {
                       Gender: {selectedPatientHistory.gender} | Contact: {selectedPatientHistory.phoneNumber}
                     </p>
                   </div>
-                  <button 
+                  <button
                     onClick={() => setSelectedPatientHistory(null)}
                     className="text-xs font-bold text-slate-400 hover:text-slate-600"
                   >
@@ -888,20 +822,18 @@ export default function Dashboard() {
 
                 <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-xs space-y-2">
                   <h4 className="font-bold text-slate-400 uppercase tracking-wider">Clinical Background Information</h4>
-                  
-                  {/* FRONTEND CRASH BUG:
-                      Assuming medicalHistory is always populated. Accesses a method on a nullable property
-                      without optional chaining! If medicalHistory is null (which is the case for Batman, Clark Kent, etc.),
-                      this code throws: "Cannot read properties of null (reading 'toUpperCase')" and crashes the app! */}
+                  {/* FIX: Optional chaining prevents crash when medicalHistory is null */}
                   <p className="text-slate-700 dark:text-slate-300 leading-5 text-sm font-semibold">
-                    {selectedPatientHistory.medicalHistory.toUpperCase()}
+                    {selectedPatientHistory.medicalHistory
+                      ? selectedPatientHistory.medicalHistory.toUpperCase()
+                      : <span className="italic text-slate-400">No medical history recorded.</span>
+                    }
                   </p>
                 </div>
 
                 <div className="pt-2 flex justify-between items-center text-xs">
-                  {/* Incomplete Missing Route trigger -> will route to 404 page! */}
-                  <Link 
-                    href={`/patients/${selectedPatientHistory.id}/history-records`} 
+                  <Link
+                    href={`/patients/${selectedPatientHistory.id}/history-records`}
                     className="text-teal-600 font-extrabold hover:underline flex items-center gap-1"
                   >
                     View Diagnostic Reports Details (Legacy App)
@@ -913,18 +845,12 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ==============================================================
-            TAB: DOCTOR ACTIVE CALLING QUEUE (DOCTOR ROLE)
-            ============================================================== */}
         {activeTab === 'queue' && (
           <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md">
             <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
               <Clock className="h-5 w-5 text-teal-600" />
               Active Operations Queue Controller
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-semibold">
-              Manage patient call sequences for live monitors. Update status from waiting to active calling.
-            </p>
 
             {doctorQueue.length === 0 ? (
               <p className="text-center py-6 text-slate-400 text-sm">No checked-in patients in queue today.</p>
@@ -933,7 +859,7 @@ export default function Dashboard() {
                 {doctorQueue.map((t) => (
                   <div
                     key={t.id}
-                    className={`p-5 rounded-2xl border shadow-md relative overflow-hidden flex flex-col justify-between ${t.status === 'CALLING' ? 'border-teal-500 bg-teal-500/10' : 'border-slate-200 dark:border-slate-800 bg-slate-500/5'}`}
+                    className={`p-5 rounded-2xl border shadow-md flex flex-col justify-between ${t.status === 'CALLING' ? 'border-teal-500 bg-teal-500/10' : 'border-slate-200 dark:border-slate-800 bg-slate-500/5'}`}
                   >
                     <div className="flex justify-between items-start">
                       <span className="text-2xl font-black text-slate-800 dark:text-slate-100">Token #{t.tokenNumber}</span>
@@ -980,9 +906,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ==============================================================
-            TAB: SYSTEM REPORTS (ADMIN ROLE)
-            ============================================================== */}
         {activeTab === 'reports' && (
           <div className="space-y-8">
             <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md">
@@ -992,9 +915,6 @@ export default function Dashboard() {
                     <TrendingUp className="h-5 w-5 text-teal-600" />
                     Doctor Revenue & Operations Report
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
-                    System-wide practitioner performance audits. Computes completed bookings and potential sales.
-                  </p>
                 </div>
                 <button
                   onClick={generateSystemReport}
@@ -1007,51 +927,34 @@ export default function Dashboard() {
 
               {adminReportLoading ? (
                 <div className="flex flex-col items-center justify-center py-12">
-                  <div className="pulse-loader">
-                    <div></div>
-                    <div></div>
-                  </div>
-                  <p className="mt-4 text-xs font-semibold text-slate-400 animate-pulse">
-                    Executing sequential nested loop aggregates. Event loop is locked...
-                  </p>
+                  <div className="pulse-loader"><div></div><div></div></div>
+                  <p className="mt-4 text-xs font-semibold text-slate-400 animate-pulse">Loading report...</p>
                 </div>
               ) : !adminReportData ? (
                 <div className="p-8 text-center bg-slate-100 dark:bg-slate-800/40 rounded-xl text-slate-400 text-xs font-semibold border border-dashed border-slate-200 dark:border-slate-700">
-                  Click the button above to load reports. Warning: Endpoint is extremely slow on larger doctor count tables!
+                  Click the button above to load reports.
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* Reporting details benchmark */}
-                  <div className="flex items-center gap-3 p-3 bg-amber-500/10 text-slate-700 dark:text-slate-300 text-xs rounded-lg border border-amber-500/20 leading-5">
-                    <Clock className="h-5 w-5 text-amber-500 shrink-0" />
-                    <div>
-                      <strong>Performance Diagnostic:</strong> API execution resolved in{' '}
-                      <span className="font-bold text-amber-500">{adminReportData.timeTakenMs} ms</span>. 
-                      Sequential nested database calls loops reduce throughput. Optimization using Promise.all or single join aggregate is required.
-                    </div>
-                  </div>
-
-                  {/* Summary widgets */}
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="p-4 bg-slate-500/5 border border-slate-200 dark:border-slate-800 rounded-xl">
                       <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Total Physicians</span>
                       <h4 className="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">{adminReportData.data.length}</h4>
                     </div>
                     <div className="p-4 bg-slate-500/5 border border-slate-200 dark:border-slate-800 rounded-xl">
-                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Sum appointments</span>
+                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Total Appointments</span>
                       <h4 className="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">
                         {adminReportData.data.reduce((sum, item) => sum + item.totalAppointments, 0)}
                       </h4>
                     </div>
                     <div className="p-4 bg-slate-500/5 border border-slate-200 dark:border-slate-800 rounded-xl">
-                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Total Sales ($)</span>
+                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Total Revenue ($)</span>
                       <h4 className="text-2xl font-black text-teal-600 dark:text-teal-400 mt-1">
                         ${adminReportData.data.reduce((sum, item) => sum + item.revenue, 0)}
                       </h4>
                     </div>
                   </div>
 
-                  {/* Table representation */}
                   <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm text-left">
                       <thead>
@@ -1072,9 +975,9 @@ export default function Dashboard() {
                             </td>
                             <td className="py-3.5 text-slate-500 dark:text-slate-400">{item.department}</td>
                             <td className="py-3.5 text-center text-slate-500 dark:text-slate-400">
-                              {item.completedAppointments} Completed / {item.totalAppointments} Total
+                              {item.completedAppointments} / {item.totalAppointments}
                             </td>
-                            <td className="py-3.5 text-center font-bold text-slate-800 dark:text-slate-200">{item.todayQueueSize} in queue</td>
+                            <td className="py-3.5 text-center font-bold text-slate-800 dark:text-slate-200">{item.todayQueueSize}</td>
                             <td className="py-3.5 text-right font-bold text-teal-600 dark:text-teal-400">${item.revenue}</td>
                           </tr>
                         ))}
@@ -1087,9 +990,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ==============================================================
-            TAB: PHYSICIAN REGISTRY (ADMIN ROLE - SQL INJECTION VULNERABILITY)
-            ============================================================== */}
         {activeTab === 'physicians' && (
           <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md space-y-6">
             <div>
@@ -1097,9 +997,6 @@ export default function Dashboard() {
                 <Award className="h-5 w-5 text-teal-600" />
                 Staff Physicians Registry Lookup
               </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
-                Database lookup for credentials. Uses a raw SQL interpolation backend query.
-              </p>
             </div>
 
             <div className="flex gap-4">
@@ -1111,31 +1008,18 @@ export default function Dashboard() {
                   type="text"
                   value={adminSearchQuery}
                   onChange={(e) => setAdminSearchQuery(e.target.value)}
-                  placeholder="Enter physician name search criteria (raw syntax supported)..."
+                  placeholder="Search physician by name..."
                   className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                 />
               </div>
-
               <button
                 onClick={searchPhysiciansAdmin}
                 className="glow-btn px-5 py-2 bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950 font-bold text-xs rounded-lg hover:bg-slate-800 dark:hover:bg-teal-400 transition-colors"
               >
-                Execute SQL Query
+                Search
               </button>
             </div>
 
-            <div className="p-3 bg-rose-500/10 text-rose-500 text-xs rounded-lg border border-rose-500/20 font-semibold leading-5 flex gap-3">
-              <ShieldAlert className="h-5 w-5 shrink-0" />
-              <div>
-                <strong>SQL Vulnerability alert:</strong> This search executes raw interpolation: 
-                <code className="block bg-black/10 dark:bg-black/30 p-1.5 rounded mt-1 font-mono">
-                  SELECT * FROM &quot;Doctor&quot; WHERE name ILIKE &apos;%&#123;query&#125;%&apos;
-                </code>
-                Can be audited by inputting standard SQL injection strings to leak full user login lists.
-              </div>
-            </div>
-
-            {/* Doctors Result List */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {doctorsList.map((doc) => (
                 <div
